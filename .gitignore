@@ -1,0 +1,51 @@
+# Dependencias
+node_modules/
+
+# Entornos
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+.next/
+out/
+build/
+
+# Turbo
+.turbo/
+
+# Prisma
+apps/api/prisma/migrations/**/migration_lock.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+
+# PWA generado
+apps/web/public/sw.js
+apps/web/public/sw.js.map
+apps/web/public/workbox-*.js
+apps/web/public/workbox-*.js.map
+
+# Docker volumes
+postgres_data/
+redis_data/
+
+# PDFs y certificados locales
+*.p12
+*.pfx
+*.pem

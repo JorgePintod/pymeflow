@@ -1,0 +1,540 @@
+// apps/api/prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// TENANTS (Multi-tenancy: cada empresa es un tenant)
+// ============================================================
+model Tenant {
+  id                String    @id @default(cuid())
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Datos de la empresa
+  businessName      String                        // Razón social
+  tradeName         String?                       // Nombre de fantasía
+  rut               String    @unique             // RUT empresa (ej: "76.123.456-7")
+  rutNormalized     String    @unique             // RUT sin puntos ni guión para APIs
+  economicActivity  String?                       // Giro comercial
+  address           String?
+  commune           String?
+  region            String?   @default("Metropolitana")
+  phone             String?
+  email             String?
+
+  // Credenciales SII (encriptadas en la aplicación, nunca en texto plano)
+  siiCertificate    String?   @db.Text            // Certificado digital .p12 en base64
+  siiCertPassword   String?                       // Contraseña del certificado (encriptada)
+  siiEnvironment    SiiEnvironment @default(CERTIFICATION)
+  siiResolution     String?                       // Número resolución SII
+  siiResolutionDate DateTime?
+
+  // Plan de suscripción
+  plan              Plan      @default(FREE)
+  planExpiresAt     DateTime?
+  stripeCustomerId  String?   @unique
+
+  // Configuración de cobranza
+  defaultPaymentDays Int      @default(30)        // Días de crédito por defecto
+  collectionEnabled Boolean   @default(true)
+  collectionDays    Int[]     @default([1, 3, 7]) // Días DESPUÉS del vencimiento para recordar
+
+  // Relaciones
+  users             User[]
+  clients           Client[]
+  invoices          Invoice[]
+  expenses          Expense[]
+  cashflowEntries   CashflowEntry[]
+  notifications     NotificationLog[]
+  subscriptions     Subscription[]
+
+  @@index([rutNormalized])
+  @@map("tenants")
+}
+
+// ============================================================
+// USUARIOS
+// ============================================================
+model User {
+  id            String    @id @default(cuid())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  email         String    @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  role          UserRole  @default(OWNER)
+  phone         String?
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+
+  // Tokens de refresh
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+
+  @@index([tenantId])
+  @@index([email])
+  @@map("users")
+}
+
+model RefreshToken {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token       String    @unique
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+  userAgent   String?
+  ipAddress   String?
+
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+// ============================================================
+// CLIENTES (Receptores de facturas)
+// ============================================================
+model Client {
+  id              String    @id @default(cuid())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Identificación
+  rut             String                          // RUT del cliente
+  rutNormalized   String                          // Sin formato, para búsquedas
+  businessName    String                          // Razón social
+  tradeName       String?
+  email           String?                         // Para envío de facturas
+  phone           String?                         // Para WhatsApp de cobranza
+  contactName     String?
+
+  // Dirección
+  address         String?
+  commune         String?
+  region          String?
+
+  // Condiciones comerciales
+  paymentDays     Int       @default(30)          // Días de crédito para este cliente
+  creditLimit     Float?                          // Límite de crédito en CLP
+  isActive        Boolean   @default(true)
+
+  // Estadísticas (actualizadas por triggers)
+  totalInvoiced   Float     @default(0)
+  totalPaid       Float     @default(0)
+  overdueAmount   Float     @default(0)
+
+  invoices        Invoice[]
+
+  @@unique([tenantId, rutNormalized])
+  @@index([tenantId])
+  @@index([rutNormalized])
+  @@map("clients")
+}
+
+// ============================================================
+// FACTURAS (DTE - Documentos Tributarios Electrónicos)
+// ============================================================
+model Invoice {
+  id                String          @id @default(cuid())
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  tenantId          String
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientId          String
+  client            Client          @relation(fields: [clientId], references: [id])
+
+  // Identificación DTE
+  documentType      DocumentType    @default(FACTURA_ELECTRONICA)
+  folio             Int?
+  serie             String?
+
+  // Estado en SII
+  siiStatus         SiiDocumentStatus @default(DRAFT)
+  siiTrackId        String?
+  siiResponse       Json?
+  xmlSii            String?           @db.Text
+  xmlAcuse          String?           @db.Text
+
+  // Montos (siempre en CLP)
+  netAmount         Float                                           // Neto (sin IVA)
+  ivaRate           Float             @default(0.19)               // Tasa IVA (19%)
+  ivaAmount         Float                                           // Monto IVA
+  totalAmount       Float                                           // Total con IVA
+
+  // Retenciones (si aplica)
+  hasRetention      Boolean           @default(false)
+  retentionRate     Float?
+  retentionAmount   Float?
+
+  // Fechas
+  issueDate         DateTime          @default(now())
+  dueDate           DateTime
+  paidAt            DateTime?
+
+  // Estado de cobranza
+  status            InvoiceStatus     @default(DRAFT)
+  notes             String?           @db.Text
+  internalRef       String?
+
+  // Cobranza
+  lastCollectionAt  DateTime?
+  collectionCount   Int               @default(0)
+
+  // Storage
+  pdfUrl            String?
+
+  items             InvoiceItem[]
+  collectionLogs    CollectionLog[]
+  payments          Payment[]
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([tenantId, status])
+  @@index([tenantId, dueDate])
+  @@index([folio, tenantId])
+  @@map("invoices")
+}
+
+// ============================================================
+// CAF - Código de Autorización de Folios (SII)
+// ============================================================
+model CafRange {
+  id              String        @id @default(cuid())
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  tenantId        String
+  documentType    DocumentType
+  environment     SiiEnvironment @default(CERTIFICATION)
+
+  folioStart      Int                               // Primer folio del rango
+  folioEnd        Int                               // Último folio del rango
+  nextFolio       Int                               // Próximo folio a asignar
+  isActive        Boolean       @default(true)      // Si este rango está en uso
+  isExhausted     Boolean       @default(false)     // Sin folios disponibles
+
+  cafXml          String        @db.Text            // XML CAF completo (encriptado)
+  privateKey      String        @db.Text            // Clave privada del CAF (encriptada)
+  publicKey       String        @db.Text            // Clave pública del CAF
+
+  expiresAt       DateTime?                         // Fecha de expiración del CAF (si aplica)
+  authorizedAt    DateTime?                         // Fecha de autorización SII
+
+  @@unique([tenantId, documentType, environment, folioStart])
+  @@index([tenantId, documentType, environment, isActive])
+  @@map("caf_ranges")
+}
+
+model InvoiceItem {
+  id          String    @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  lineNumber  Int
+  code        String?
+  description String
+  quantity    Float     @default(1)
+  unit        String?   @default("UN")
+  unitPrice   Float
+  discount    Float     @default(0)
+  lineTotal   Float
+  isExempt    Boolean   @default(false)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+// ============================================================
+// PAGOS
+// ============================================================
+model Payment {
+  id            String        @id @default(cuid())
+  createdAt     DateTime      @default(now())
+
+  invoiceId     String
+  invoice       Invoice       @relation(fields: [invoiceId], references: [id])
+  tenantId      String
+
+  amount        Float
+  paidAt        DateTime
+  paymentMethod PaymentMethod @default(TRANSFER)
+  reference     String?
+  notes         String?
+
+  @@index([invoiceId])
+  @@index([tenantId])
+  @@map("payments")
+}
+
+// ============================================================
+// GASTOS
+// ============================================================
+model Expense {
+  id            String          @id @default(cuid())
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  tenantId      String
+  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  description   String
+  category      ExpenseCategory
+  amount        Float
+  netAmount     Float?
+  ivaAmount     Float?
+  issueDate     DateTime
+  dueDate       DateTime?
+  paidAt        DateTime?
+  providerRut   String?
+  providerName  String?
+  documentType  String?
+  folio         String?
+  receiptUrl    String?
+
+  @@index([tenantId])
+  @@index([tenantId, issueDate])
+  @@map("expenses")
+}
+
+// ============================================================
+// FLUJO DE CAJA
+// ============================================================
+model CashflowEntry {
+  id            String              @id @default(cuid())
+  createdAt     DateTime            @default(now())
+
+  tenantId      String
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  entryDate     DateTime
+  description   String
+  type          CashflowEntryType
+  amount        Float
+  category      String?
+  isConfirmed   Boolean             @default(false)
+  sourceId      String?
+  sourceType    String?
+
+  @@index([tenantId, entryDate])
+  @@map("cashflow_entries")
+}
+
+// ============================================================
+// LOGS DE COBRANZA
+// ============================================================
+model CollectionLog {
+  id            String            @id @default(cuid())
+  createdAt     DateTime          @default(now())
+
+  invoiceId     String
+  invoice       Invoice           @relation(fields: [invoiceId], references: [id])
+  tenantId      String
+
+  channel       CollectionChannel
+  status        CollectionStatus
+  messageBody   String            @db.Text
+  externalId    String?
+  errorMessage  String?
+
+  @@index([invoiceId])
+  @@map("collection_logs")
+}
+
+// ============================================================
+// NOTIFICACIONES GENERALES
+// ============================================================
+model NotificationLog {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+
+  type        String
+  title       String
+  body        String
+  isRead      Boolean   @default(false)
+  data        Json?
+
+  @@index([tenantId, isRead])
+  @@map("notification_logs")
+}
+
+// ============================================================
+// SUSCRIPCIONES Y FACTURACIÓN
+// ============================================================
+model Subscription {
+  id                  String              @id @default(cuid())
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  tenantId            String
+  tenant              Tenant              @relation(fields: [tenantId], references: [id])
+
+  plan                Plan
+  status              SubscriptionStatus
+  stripeSubscriptionId String?           @unique
+  currentPeriodStart  DateTime
+  currentPeriodEnd    DateTime
+  cancelAtPeriodEnd   Boolean            @default(false)
+
+  @@index([tenantId])
+  @@map("subscriptions")
+}
+
+// ============================================================
+// AUDITORÍA
+// ============================================================
+model AuditLog {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  tenantId    String
+  action      String
+  entityType  String
+  entityId    String
+  before      Json?
+  after       Json?
+  ipAddress   String?
+
+  @@index([tenantId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+// ============================================================
+// PUSH SUBSCRIPTIONS (PWA)
+// ============================================================
+model PushSubscription {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now())
+
+  tenantId     String
+  userId       String
+
+  endpoint     String   @unique  @db.Text
+  p256dh       String
+  auth         String
+
+  userAgent    String?
+  isActive     Boolean  @default(true)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum Plan {
+  FREE
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  ACCOUNTANT
+  OPERATOR
+}
+
+enum DocumentType {
+  FACTURA_ELECTRONICA
+  BOLETA_ELECTRONICA
+  NOTA_CREDITO_ELECTRONICA
+  NOTA_DEBITO_ELECTRONICA
+  LIQUIDACION_FACTURA
+  FACTURA_EXENTA
+}
+
+enum SiiEnvironment {
+  CERTIFICATION
+  PRODUCTION
+}
+
+enum SiiDocumentStatus {
+  DRAFT
+  PENDING
+  ACCEPTED
+  REJECTED
+  OBJECTED
+  CANCELLED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  SENT
+  PARTIAL
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentMethod {
+  TRANSFER
+  CHECK
+  CASH
+  CARD
+  OTHER
+}
+
+enum ExpenseCategory {
+  REMUNERACIONES
+  ARRIENDO
+  SERVICIOS_BASICOS
+  MATERIALES
+  TRANSPORTE
+  MARKETING
+  SOFTWARE
+  CONTABILIDAD
+  OTROS
+}
+
+enum CashflowEntryType {
+  INCOME
+  EXPENSE
+  PROJECTION
+}
+
+enum CollectionChannel {
+  EMAIL
+  WHATSAPP
+  SMS
+}
+
+enum CollectionStatus {
+  SENT
+  DELIVERED
+  FAILED
+  BOUNCED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  TRIALING
+}
