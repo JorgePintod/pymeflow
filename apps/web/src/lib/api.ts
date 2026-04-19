@@ -317,8 +317,10 @@ export const api = {
   getExpense: (id: string) =>
     request<{ success: boolean; data: Expense }>(`/api/v1/expenses/${id}`),
 
-  getExpenseSummary: () =>
-    request<{ success: boolean; data: ExpenseSummary }>("/api/v1/expenses/summary"),
+  getExpenseSummary: (month?: string) =>
+    request<{ success: boolean; data: ExpenseSummary }>(
+      `/api/v1/expenses/summary${month ? `?month=${month}` : ""}`
+    ),
 
   createExpense: (data: unknown) =>
     request<{ success: boolean; data: Expense }>("/api/v1/expenses", {
@@ -582,6 +584,9 @@ export interface ExpenseSummary {
   totalIvaCredito: number;
   monthlyExpenses: number;
   monthlyIvaCredito: number;
+  monthlyIvaDebito: number;
+  monthlyIvaPagar: number;
+  month: string;
   byCategory: Array<{
     category: string;
     total: number;

@@ -35,6 +35,9 @@ export interface ExpenseSummary {
   totalIvaCredito: number;
   monthlyExpenses: number;
   monthlyIvaCredito: number;
+  monthlyIvaDebito: number;
+  monthlyIvaPagar: number;
+  month: string; // "YYYY-MM"
   byCategory: Array<{ category: string; total: number; count: number }>;
 }
 
@@ -160,19 +163,34 @@ export class ExpenseService {
   }
 
   /**
-   * Resumen de gastos y crédito fiscal IVA.
+   * Resumen de gastos y crédito fiscal IVA para el F29.
+   * @param month - Opcional: "YYYY-MM" para filtrar. Default: mes actual.
    */
-  async getSummary(tenantId: string): Promise<ExpenseSummary> {
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  async getSummary(tenantId: string, month?: string): Promise<ExpenseSummary> {
+    let monthStart: Date;
+    let monthEnd: Date;
 
-    const [totalAgg, monthlyAgg, byCategory] = await Promise.all([
+    if (month && /^\d{4}-\d{2}$/.test(month)) {
+      const parts = month.split("-");
+      const year = parseInt(parts[0]!, 10);
+      const mon = parseInt(parts[1]!, 10);
+      monthStart = new Date(year, mon - 1, 1);
+      monthEnd = new Date(year, mon, 1);
+    } else {
+      const now = new Date();
+      monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    }
+
+    const selectedMonth = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, "0")}`;
+
+    const [totalAgg, monthlyAgg, byCategory, invoiceIvaAgg] = await Promise.all([
       db.expense.aggregate({
         where: { tenantId },
         _sum: { amount: true, ivaAmount: true },
       }),
       db.expense.aggregate({
-        where: { tenantId, issueDate: { gte: monthStart } },
+        where: { tenantId, issueDate: { gte: monthStart, lt: monthEnd } },
         _sum: { amount: true, ivaAmount: true },
       }),
       db.expense.groupBy({
@@ -182,13 +200,28 @@ export class ExpenseService {
         _count: { id: true },
         orderBy: { _sum: { amount: "desc" } },
       }),
+      // IVA Débito: IVA cobrado en facturas emitidas (no borradores ni canceladas)
+      db.invoice.aggregate({
+        where: {
+          tenantId,
+          issueDate: { gte: monthStart, lt: monthEnd },
+          status: { notIn: ["DRAFT", "CANCELLED"] },
+        },
+        _sum: { ivaAmount: true },
+      }),
     ]);
+
+    const monthlyIvaCredito = Math.round(monthlyAgg._sum.ivaAmount ?? 0);
+    const monthlyIvaDebito = Math.round(invoiceIvaAgg._sum.ivaAmount ?? 0);
 
     return {
       totalExpenses: Math.round(totalAgg._sum.amount ?? 0),
       totalIvaCredito: Math.round(totalAgg._sum.ivaAmount ?? 0),
       monthlyExpenses: Math.round(monthlyAgg._sum.amount ?? 0),
-      monthlyIvaCredito: Math.round(monthlyAgg._sum.ivaAmount ?? 0),
+      monthlyIvaCredito,
+      monthlyIvaDebito,
+      monthlyIvaPagar: Math.max(0, monthlyIvaDebito - monthlyIvaCredito),
+      month: selectedMonth,
       byCategory: byCategory.map((c) => ({
         category: c.category,
         total: Math.round(c._sum.amount ?? 0),

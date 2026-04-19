@@ -66,10 +66,10 @@ export function useExpense(id: string) {
   });
 }
 
-export function useExpenseSummary() {
+export function useExpenseSummary(month?: string) {
   return useQuery({
-    queryKey: ["expenses", "summary"],
-    queryFn: () => api.getExpenseSummary(),
+    queryKey: ["expenses", "summary", month ?? "current"],
+    queryFn: () => api.getExpenseSummary(month),
   });
 }
 

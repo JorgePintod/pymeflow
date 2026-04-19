@@ -71,6 +71,17 @@ export async function buildApp() {
     };
   });
 
+  // ─── Limpiar contexto de tenant al finalizar cada request ────────────────
+  // Asegura que ninguna conexión del pool reutilice el tenantId de un request
+  // anterior en caso de que authenticate no haya sido invocado.
+  app.addHook("onResponse", async (_request, _reply) => {
+    try {
+      await db.$executeRaw`SELECT set_config('app.current_tenant_id', '', false)`;
+    } catch {
+      // Silencioso: no interrumpir el flujo si la DB no está disponible
+    }
+  });
+
   // ─── Registrar módulos con prefijo /api/v1 ──────────
 
   await app.register(authRoutes, { prefix: "/api/v1/auth" });

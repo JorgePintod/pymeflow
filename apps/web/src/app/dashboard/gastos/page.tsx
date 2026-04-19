@@ -12,6 +12,9 @@ import {
   DollarSign,
   PieChart,
   X,
+  TrendingUp,
+  TrendingDown,
+  Minus,
 } from "lucide-react";
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -28,10 +31,20 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 const CATEGORIES = Object.keys(CATEGORY_LABELS);
 
+type Tab = "gastos" | "resumen-iva";
+
+// Genera "YYYY-MM" del mes actual
+function currentMonth() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 export default function ExpensesPage() {
+  const [tab, setTab] = useState<Tab>("gastos");
   const [filterCategory, setFilterCategory] = useState("");
   const [filterPaid, setFilterPaid] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [ivaMonth, setIvaMonth] = useState(currentMonth);
 
   const params = new URLSearchParams();
   if (filterCategory) params.set("category", filterCategory);
@@ -39,7 +52,7 @@ export default function ExpensesPage() {
   const queryStr = params.toString();
 
   const { data: expensesRes, isLoading } = useExpenses(queryStr || undefined);
-  const { data: summaryRes } = useExpenseSummary();
+  const { data: summaryRes } = useExpenseSummary(ivaMonth);
   const createMutation = useCreateExpense();
   const deleteMutation = useDeleteExpense();
   const markPaidMutation = useMarkExpensePaid();
@@ -60,90 +73,165 @@ export default function ExpensesPage() {
         </button>
       </div>
 
-      {/* Summary KPIs */}
-      {summary && (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <SummaryCard
-            title="Total gastos (mes)"
-            value={formatCLP(summary.monthlyExpenses)}
-            icon={<DollarSign className="h-5 w-5 text-red-500" />}
-          />
-          <SummaryCard
-            title="IVA Crédito Fiscal (mes)"
-            value={formatCLP(summary.monthlyIvaCredito)}
-            icon={<Receipt className="h-5 w-5 text-blue-600" />}
-          />
-          <SummaryCard
-            title="Total acumulado"
-            value={formatCLP(summary.totalExpenses)}
-            icon={<PieChart className="h-5 w-5 text-gray-600" />}
-          />
-          <SummaryCard
-            title="IVA Crédito total"
-            value={formatCLP(summary.totalIvaCredito)}
-            icon={<Receipt className="h-5 w-5 text-green-600" />}
-          />
-        </div>
-      )}
-
-      {/* Category Breakdown */}
-      {summary && summary.byCategory.length > 0 && (
-        <div className="rounded-lg border bg-white p-6">
-          <h2 className="mb-4 text-lg font-semibold text-gray-900">Gastos por categoría</h2>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {summary.byCategory.map((cat) => (
-              <div key={cat.category} className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">
-                    {CATEGORY_LABELS[cat.category] ?? cat.category}
-                  </p>
-                  <p className="text-xs text-gray-500">{cat.count} gastos</p>
-                </div>
-                <p className="text-sm font-semibold text-gray-700">{formatCLP(cat.total)}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Filters */}
-      <div className="flex gap-3">
-        <select
-          value={filterCategory}
-          onChange={(e) => setFilterCategory(e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm"
-        >
-          <option value="">Todas las categorías</option>
-          {CATEGORIES.map((c) => (
-            <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
+      {/* Tabs */}
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex gap-6">
+          {(["gastos", "resumen-iva"] as Tab[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={cn(
+                "border-b-2 pb-3 text-sm font-medium transition-colors",
+                tab === t
+                  ? "border-brand-600 text-brand-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700",
+              )}
+            >
+              {t === "gastos" ? "Gastos" : "Resumen IVA"}
+            </button>
           ))}
-        </select>
-        <select
-          value={filterPaid}
-          onChange={(e) => setFilterPaid(e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm"
-        >
-          <option value="">Todos</option>
-          <option value="true">Pagados</option>
-          <option value="false">Pendientes</option>
-        </select>
+        </nav>
       </div>
 
-      {/* Create Form Modal */}
-      {showForm && (
-        <CreateExpenseForm
-          onSubmit={(data) => {
-            createMutation.mutate(data, {
-              onSuccess: () => setShowForm(false),
-            });
-          }}
-          isPending={createMutation.isPending}
-          onClose={() => setShowForm(false)}
-        />
+      {/* ── TAB: RESUMEN IVA ──────────────────────────────────────────────── */}
+      {tab === "resumen-iva" && (
+        <div className="space-y-6">
+          {/* Selector de mes */}
+          <div className="flex items-center gap-3">
+            <label className="text-sm font-medium text-gray-700">Mes:</label>
+            <input
+              type="month"
+              value={ivaMonth}
+              onChange={(e) => setIvaMonth(e.target.value)}
+              className="rounded-lg border px-3 py-2 text-sm"
+            />
+            <span className="text-xs text-gray-400">Declaración mensual de IVA (F29)</span>
+          </div>
+
+          {/* Tarjetas IVA */}
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="rounded-lg border bg-white p-5">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-gray-500">IVA Débito Fiscal</p>
+                <TrendingUp className="h-5 w-5 text-red-500" />
+              </div>
+              <p className="mt-2 text-2xl font-bold text-gray-900">
+                {formatCLP(summary?.monthlyIvaDebito ?? 0)}
+              </p>
+              <p className="mt-1 text-xs text-gray-400">IVA de facturas emitidas</p>
+            </div>
+
+            <div className="rounded-lg border bg-white p-5">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-gray-500">IVA Crédito Fiscal</p>
+                <TrendingDown className="h-5 w-5 text-green-600" />
+              </div>
+              <p className="mt-2 text-2xl font-bold text-gray-900">
+                {formatCLP(summary?.monthlyIvaCredito ?? 0)}
+              </p>
+              <p className="mt-1 text-xs text-gray-400">IVA de facturas recibidas (gastos)</p>
+            </div>
+
+            <div className={cn(
+              "rounded-lg border p-5",
+              (summary?.monthlyIvaPagar ?? 0) > 0 ? "bg-red-50 border-red-200" : "bg-green-50 border-green-200",
+            )}>
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-gray-500">IVA a pagar al SII</p>
+                <Minus className={cn("h-5 w-5", (summary?.monthlyIvaPagar ?? 0) > 0 ? "text-red-500" : "text-green-600")} />
+              </div>
+              <p className={cn("mt-2 text-2xl font-bold", (summary?.monthlyIvaPagar ?? 0) > 0 ? "text-red-700" : "text-green-700")}>
+                {formatCLP(summary?.monthlyIvaPagar ?? 0)}
+              </p>
+              <p className="mt-1 text-xs text-gray-400">Débito − Crédito</p>
+            </div>
+          </div>
+
+          {/* Gastos acumulados totales */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-lg border bg-white p-5">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-gray-500">Total gastos (mes)</p>
+                <DollarSign className="h-5 w-5 text-gray-500" />
+              </div>
+              <p className="mt-2 text-2xl font-bold text-gray-900">
+                {formatCLP(summary?.monthlyExpenses ?? 0)}
+              </p>
+            </div>
+            <div className="rounded-lg border bg-white p-5">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-gray-500">Total acumulado</p>
+                <PieChart className="h-5 w-5 text-gray-500" />
+              </div>
+              <p className="mt-2 text-2xl font-bold text-gray-900">
+                {formatCLP(summary?.totalExpenses ?? 0)}
+              </p>
+            </div>
+          </div>
+
+          {/* Breakdown por categoría */}
+          {summary && summary.byCategory.length > 0 && (
+            <div className="rounded-lg border bg-white p-6">
+              <h2 className="mb-4 text-lg font-semibold text-gray-900">Distribución por categoría</h2>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {summary.byCategory.map((cat) => (
+                  <div key={cat.category} className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {CATEGORY_LABELS[cat.category] ?? cat.category}
+                      </p>
+                      <p className="text-xs text-gray-500">{cat.count} gastos</p>
+                    </div>
+                    <p className="text-sm font-semibold text-gray-700">{formatCLP(cat.total)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
-      {/* Expenses Table */}
-      <div className="rounded-lg border bg-white">
+      {/* ── TAB: GASTOS ──────────────────────────────────────────────────── */}
+      {tab === "gastos" && (
+        <>
+          {/* Filters */}
+          <div className="flex gap-3">
+            <select
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+              className="rounded-lg border px-3 py-2 text-sm"
+            >
+              <option value="">Todas las categorías</option>
+              {CATEGORIES.map((c) => (
+                <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>
+              ))}
+            </select>
+            <select
+              value={filterPaid}
+              onChange={(e) => setFilterPaid(e.target.value)}
+              className="rounded-lg border px-3 py-2 text-sm"
+            >
+              <option value="">Todos</option>
+              <option value="true">Pagados</option>
+              <option value="false">Pendientes</option>
+            </select>
+          </div>
+
+          {/* Create Form Modal */}
+          {showForm && (
+            <CreateExpenseForm
+              onSubmit={(data) => {
+                createMutation.mutate(data, {
+                  onSuccess: () => setShowForm(false),
+                });
+              }}
+              isPending={createMutation.isPending}
+              onClose={() => setShowForm(false)}
+            />
+          )}
+
+          {/* Expenses Table */}
+          <div className="rounded-lg border bg-white">
         {isLoading ? (
           <div className="flex h-32 items-center justify-center">
             <div className="h-6 w-6 animate-spin rounded-full border-4 border-brand-600 border-t-transparent" />
@@ -229,27 +317,14 @@ export default function ExpensesPage() {
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }
 
 // ─── Sub-components ──────────────────────────────────────
 
-function SummaryCard({ title, value, icon }: {
-  title: string;
-  value: string;
-  icon: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-lg border bg-white p-5">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">{title}</p>
-        {icon}
-      </div>
-      <p className="mt-2 text-2xl font-bold text-gray-900">{value}</p>
-    </div>
-  );
-}
 
 function CreateExpenseForm({ onSubmit, isPending, onClose }: {
   onSubmit: (data: Record<string, unknown>) => void;

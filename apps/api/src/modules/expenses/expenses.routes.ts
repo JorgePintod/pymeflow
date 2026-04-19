@@ -59,7 +59,8 @@ export async function expensesRoutes(app: FastifyInstance): Promise<void> {
 
   // Resumen de gastos e IVA
   app.get("/summary", async (request) => {
-    const summary = await expenseService.getSummary(request.user.tenantId);
+    const query = request.query as Record<string, string>;
+    const summary = await expenseService.getSummary(request.user.tenantId, query.month);
     return { success: true, data: summary };
   });
 

@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import jwt from "jsonwebtoken";
 import { env } from "../../config/env.js";
+import { db } from "../../config/database.js";
 import { UnauthorizedError, ForbiddenError } from "../../shared/errors.js";
 import type { UserRole } from "@prisma/client";
 
@@ -51,6 +52,11 @@ export async function authenticate(
     }
 
     request.user = payload;
+
+    // Propagar el tenantId a PostgreSQL para RLS (Row Level Security).
+    // Usa set_config con is_local=false (session-level) para que persista
+    // durante el request. Se limpia en el hook onResponse de server.ts.
+    await db.$executeRaw`SELECT set_config('app.current_tenant_id', ${payload.tenantId}, false)`;
   } catch (error) {
     if (error instanceof UnauthorizedError) {
       throw error;
